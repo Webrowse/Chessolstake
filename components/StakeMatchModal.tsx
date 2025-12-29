@@ -56,17 +56,29 @@ const generateRoomCode = (): string => {
 const PEER_PREFIX = 'pkchess';
 
 // PeerJS server configuration
-// Use local PeerJS server for development (run: npm run dev:peer)
-// Falls back to cloud server if local is not available
-const USE_LOCAL_PEER_SERVER = true;
-
-const PEER_OPTIONS = USE_LOCAL_PEER_SERVER ? {
-    host: 'localhost',
-    port: 9000,
-    path: '/',
-    debug: 2,
-} : {
-    debug: 2,
+// The mDNS privacy feature in browsers prevents direct local connections
+// between different browsers on the same machine. We'll use public STUN
+// servers which should work for same-network connections.
+const PEER_OPTIONS = {
+    debug: 3,
+    config: {
+        iceServers: [
+            // Multiple STUN servers for better reliability
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            // ExpressTurn free TURN server
+            {
+                urls: 'turn:relay1.expressturn.com:3478',
+                username: 'efN9VFAPQ3BHRGMJLM',
+                credential: '7rL9YmqerOkqKmIo',
+            },
+        ],
+        // iceCandidatePoolSize helps gather candidates faster
+        iceCandidatePoolSize: 10,
+    },
 };
 
 
@@ -231,21 +243,24 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 console.log('[Host] Incoming connection from:', conn.peer, 'open:', conn.open);
                 connRef.current = conn;
 
+                let stakeInfoSent = false;
+
                 // Send stake info function (includes on-chain tx signature)
                 const sendStakeInfo = () => {
-                    if (!conn.open) {
-                        console.log('[Host] Connection not open yet, waiting...');
+                    if (stakeInfoSent) {
+                        console.log('[Host] Stake info already sent, skipping');
                         return;
                     }
                     const stakeInfo: HandshakeMessage = {
                         type: 'stake_info',
                         stakeAmount: amount,
                         hostAddress: publicKey.toBase58(),
-                        txSignature: signature, // Include on-chain tx signature for verification
+                        txSignature: signature,
                     };
                     console.log('[Host] Sending stake info:', stakeInfo);
                     try {
                         conn.send(stakeInfo);
+                        stakeInfoSent = true;
                         console.log('[Host] Stake info sent successfully');
                     } catch (e) {
                         console.error('[Host] Failed to send stake info:', e);
@@ -257,7 +272,6 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     console.log('[Host] Received data:', data);
                     const msg = data as HandshakeMessage;
                     if (msg.type === 'stake_confirmed' && msg.joinerAddress && msg.txSignature) {
-                        // Joiner has staked on-chain and confirmed
                         console.log('[Host] Joiner staked and confirmed! Starting game...');
                         setJoinerTxSignature(msg.txSignature);
                         toast.success('Opponent joined! Game starting...');
@@ -284,33 +298,32 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 });
 
                 conn.on('open', () => {
-                    console.log('[Host] Connection opened with joiner');
+                    console.log('[Host] Connection open event fired');
                     sendStakeInfo();
                 });
+
+                // Also listen for the underlying peerConnection's datachannel event
+                const peerConnection = (conn as any).peerConnection as RTCPeerConnection | undefined;
+                if (peerConnection) {
+                    console.log('[Host] Found peerConnection, listening for datachannel');
+                    peerConnection.ondatachannel = (event) => {
+                        console.log('[Host] DataChannel received:', event.channel.label, 'state:', event.channel.readyState);
+                        event.channel.onopen = () => {
+                            console.log('[Host] DataChannel opened via event');
+                            // Give PeerJS a moment to update conn.open
+                            setTimeout(() => {
+                                if (conn.open) {
+                                    sendStakeInfo();
+                                }
+                            }, 100);
+                        };
+                    };
+                }
 
                 // If already open, send immediately
                 if (conn.open) {
                     console.log('[Host] Connection already open');
                     sendStakeInfo();
-                } else {
-                    // Poll for connection open state as fallback
-                    console.log('[Host] Connection not yet open, setting up polling...');
-                    let attempts = 0;
-                    const pollInterval = setInterval(() => {
-                        attempts++;
-                        // Access the underlying data channel to check its state
-                        const dc = (conn as any).dataChannel;
-                        const dcState = dc?.readyState || 'no-dc';
-                        console.log('[Host] Polling attempt', attempts, 'conn.open:', conn.open, 'dataChannel:', dcState);
-
-                        if (conn.open || dcState === 'open') {
-                            clearInterval(pollInterval);
-                            sendStakeInfo();
-                        } else if (attempts > 40) {
-                            clearInterval(pollInterval);
-                            console.log('[Host] Gave up polling after 40 attempts');
-                        }
-                    }, 250);
                 }
             });
 
@@ -352,6 +365,12 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
             return;
         }
 
+        // Prevent double-clicks or re-renders from creating multiple connections
+        if (isLoading) {
+            console.log('[Joiner] Already loading, ignoring duplicate call');
+            return;
+        }
+
         setIsLoading(true);
         setError(null);
 
@@ -359,22 +378,36 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
             const hostPeerId = PEER_PREFIX + roomCode.toUpperCase();
             console.log('[Joiner] Will connect to host peer ID:', hostPeerId);
 
-            // Destroy any existing peer
+            // Destroy any existing peer completely
             if (peerRef.current) {
+                console.log('[Joiner] Destroying existing peer');
                 peerRef.current.destroy();
+                peerRef.current = null;
+            }
+            if (connRef.current) {
+                connRef.current.close();
+                connRef.current = null;
             }
 
+            // Small delay to ensure cleanup
+            await new Promise(resolve => setTimeout(resolve, 100));
+
             // Create our own peer first
+            console.log('[Joiner] Creating peer with options:', PEER_OPTIONS);
             const peer = new Peer(PEER_OPTIONS);
             peerRef.current = peer;
 
             let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
             let hasConnected = false;
 
+            peer.on('error', (err: any) => {
+                console.error('[Joiner] Peer error BEFORE open:', err.type, err.message, err);
+            });
+
             peer.on('open', (myId) => {
                 console.log('[Joiner] Our peer ready with ID:', myId, '- now connecting to host:', hostPeerId);
 
-                // Now connect to the host
+                // Now connect to the host - use defaults for best compatibility
                 const conn = peer.connect(hostPeerId);
                 connRef.current = conn;
 
@@ -382,26 +415,25 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 connectionTimeout = setTimeout(() => {
                     if (!hasConnected) {
                         console.log('[Joiner] Connection timeout - no response from host');
-                        setError('Match not found. Check the room code.');
+                        setError('Match not found or connection failed. Check the room code.');
                         setIsLoading(false);
                         conn.close();
                     }
                 }, 20000);
 
                 conn.on('open', () => {
-                    console.log('[Joiner] Connection opened to host!');
+                    console.log('[Joiner] Connection open event fired!');
                     hasConnected = true;
                     if (connectionTimeout) clearTimeout(connectionTimeout);
-                    // Wait for stake_info from host
                 });
 
                 conn.on('data', (data) => {
                     console.log('[Joiner] Received data:', data);
+                    hasConnected = true;
+                    if (connectionTimeout) clearTimeout(connectionTimeout);
                     const msg = data as HandshakeMessage;
                     if (msg.type === 'stake_info') {
                         console.log('[Joiner] Received stake info:', msg);
-                        hasConnected = true;
-                        if (connectionTimeout) clearTimeout(connectionTimeout);
                         setHostStakeAmount(msg.stakeAmount || 0);
                         setHostAddress(msg.hostAddress || null);
                         setStep('joining');
@@ -428,26 +460,64 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     }
                 });
 
-                // Poll for connection open state on joiner side too
-                // PeerJS sometimes doesn't fire the 'open' event reliably
+                // Monitor the underlying RTCPeerConnection for debugging
+                const checkPeerConnection = () => {
+                    const pc = (conn as any).peerConnection as RTCPeerConnection | undefined;
+                    if (pc) {
+                        console.log('[Joiner] RTCPeerConnection state:', pc.connectionState, 'ice:', pc.iceConnectionState, 'signaling:', pc.signalingState);
+
+                        pc.onconnectionstatechange = () => {
+                            console.log('[Joiner] RTCPeerConnection state changed:', pc.connectionState);
+                        };
+                        pc.oniceconnectionstatechange = () => {
+                            console.log('[Joiner] ICE connection state changed:', pc.iceConnectionState);
+                        };
+                    } else {
+                        // peerConnection might not be available immediately
+                        setTimeout(checkPeerConnection, 100);
+                    }
+                };
+                checkPeerConnection();
+
+                // Check the data channel directly
+                const checkDataChannel = () => {
+                    const dc = (conn as any).dataChannel as RTCDataChannel | undefined;
+                    if (dc) {
+                        console.log('[Joiner] DataChannel found:', dc.label, 'state:', dc.readyState);
+                        dc.onopen = () => {
+                            console.log('[Joiner] DataChannel opened directly!');
+                            hasConnected = true;
+                            if (connectionTimeout) clearTimeout(connectionTimeout);
+                        };
+                    }
+                };
+
+                // Poll for data channel creation
                 let pollAttempts = 0;
                 const pollInterval = setInterval(() => {
                     pollAttempts++;
-                    // Access the underlying data channel to check its state
-                    const dc = (conn as any).dataChannel;
-                    const dcState = dc?.readyState || 'no-dc';
-                    console.log('[Joiner] Poll attempt', pollAttempts, 'conn.open:', conn.open, 'dataChannel:', dcState);
+                    const dc = (conn as any).dataChannel as RTCDataChannel | undefined;
+                    const pc = (conn as any).peerConnection as RTCPeerConnection | undefined;
 
-                    if (conn.open || dcState === 'open') {
+                    console.log('[Joiner] Poll #' + pollAttempts,
+                        'conn.open:', conn.open,
+                        'dc:', dc ? dc.readyState : 'none',
+                        'pc:', pc ? pc.connectionState : 'none',
+                        'ice:', pc ? pc.iceConnectionState : 'none'
+                    );
+
+                    if (dc && !dc.onopen) {
+                        checkDataChannel();
+                    }
+
+                    if (conn.open || (dc && dc.readyState === 'open')) {
                         clearInterval(pollInterval);
-                        if (!hasConnected) {
-                            console.log('[Joiner] Detected open connection via polling');
-                            hasConnected = true;
-                            if (connectionTimeout) clearTimeout(connectionTimeout);
-                        }
-                    } else if (pollAttempts > 40) { // 10 seconds of polling
+                        console.log('[Joiner] Connection ready via polling');
+                        hasConnected = true;
+                        if (connectionTimeout) clearTimeout(connectionTimeout);
+                    } else if (pollAttempts > 60) { // 15 seconds of polling
                         clearInterval(pollInterval);
-                        console.log('[Joiner] Gave up polling after 40 attempts');
+                        console.log('[Joiner] Gave up polling after 60 attempts');
                     }
                 }, 250);
             });
