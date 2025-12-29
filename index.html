@@ -1,0 +1,136 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>PokeChess</title>
+
+    <!-- ✅ No Tailwind CDN script anymore -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <!-- Global polyfill for Solana -->
+    <script>
+      window.global = window;
+    </script>
+
+    <!-- Fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto:wght@300;400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Your custom global CSS utilities -->
+    <style>
+      :root {
+        --color-primary: #eab308; /* yellow-500 */
+        --color-bg-dark: #0f172a; /* slate-900 */
+      }
+      body {
+        font-family: 'Roboto', sans-serif;
+        background-color: var(--color-bg-dark);
+        color: #f8fafc; /* slate-50 */
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      .font-pixel {
+        font-family: 'Press Start 2P', cursive;
+        letter-spacing: -0.05em;
+      }
+
+      /* Premium Noise Texture */
+      .bg-noise {
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='1'/%3E%3C/svg%3E");
+      }
+
+      /* Premium Scrollbar */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.2);
+        border-radius: 9999px;
+        backdrop-filter: blur(4px);
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(148, 163, 184, 0.4);
+      }
+
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+
+      /* Premium Micro-interactions */
+      .btn-press {
+        transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1),
+          filter 0.2s ease, box-shadow 0.2s ease;
+      }
+      .btn-press:active {
+        transform: scale(0.96);
+        filter: brightness(0.9);
+      }
+
+      /* Focus Ring */
+      *:focus-visible {
+        outline: 2px solid #3b82f6;
+        outline-offset: 2px;
+      }
+
+      /* Glassmorphism Utilities */
+      .glass-panel {
+        background: rgba(30, 41, 59, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .glass-card {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      .text-glow {
+        text-shadow: 0 0 10px currentColor;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "chess.js": "https://aistudiocdn.com/chess.js@^1.4.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "react-hot-toast": "https://aistudiocdn.com/react-hot-toast@^2.6.0",
+    "canvas-confetti": "https://aistudiocdn.com/canvas-confetti@^1.9.4",
+    "peerjs": "https://aistudiocdn.com/peerjs@^1.5.5",
+    "vite": "https://aistudiocdn.com/vite@^7.2.4",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1",
+    "tailwindcss": "https://aistudiocdn.com/tailwindcss@^4.1.17"
+  }
+}
+</script>
+</head>
+  <body
+    class="bg-slate-950 text-slate-50 overflow-x-hidden antialiased selection:bg-yellow-500/30 selection:text-yellow-200"
+  >
+    <div id="root"></div>
+    <!-- Vite entry -->
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
