@@ -1,5 +1,11 @@
 import { PublicKey } from '@solana/web3.js';
 
+// Import the actual generated IDL from Anchor build
+// This ensures compatibility with Anchor 0.32.x format
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore - JSON import
+import POKECHESS_STAKING_IDL from './pokechess_staking_idl.json';
+
 // Program ID - deployed to Devnet (lazy initialization to avoid polyfill timing issues)
 const STAKING_PROGRAM_ID_STR = 'B5jR7EVRTkbJBc7zmRXmMAW1EwYpS9MfniGtRGxPoZ3u';
 const PLATFORM_TREASURY_STR = '11111111111111111111111111111111';
@@ -80,158 +86,8 @@ export interface DeclareWinnerParams {
     winner: PublicKey;
 }
 
-// IDL for Anchor program (simplified for client use)
-export const STAKING_IDL = {
-    version: '0.1.0',
-    name: 'pokechess_staking',
-    instructions: [
-        {
-            name: 'createMatch',
-            accounts: [
-                { name: 'matchAccount', isMut: true, isSigner: false },
-                { name: 'escrowVault', isMut: true, isSigner: false },
-                { name: 'host', isMut: true, isSigner: true },
-                { name: 'systemProgram', isMut: false, isSigner: false },
-            ],
-            args: [
-                { name: 'matchId', type: { array: ['u8', 32] } },
-                { name: 'stakeAmount', type: 'u64' },
-            ],
-        },
-        {
-            name: 'joinMatch',
-            accounts: [
-                { name: 'matchAccount', isMut: true, isSigner: false },
-                { name: 'escrowVault', isMut: true, isSigner: false },
-                { name: 'challenger', isMut: true, isSigner: true },
-                { name: 'systemProgram', isMut: false, isSigner: false },
-            ],
-            args: [],
-        },
-        {
-            name: 'declareWinner',
-            accounts: [
-                { name: 'matchAccount', isMut: true, isSigner: false },
-                { name: 'caller', isMut: true, isSigner: true },
-            ],
-            args: [
-                { name: 'winner', type: 'publicKey' },
-            ],
-        },
-        {
-            name: 'claimReward',
-            accounts: [
-                { name: 'matchAccount', isMut: true, isSigner: false },
-                { name: 'escrowVault', isMut: true, isSigner: false },
-                { name: 'winner', isMut: true, isSigner: true },
-                { name: 'platformTreasury', isMut: true, isSigner: false },
-                { name: 'systemProgram', isMut: false, isSigner: false },
-            ],
-            args: [],
-        },
-        {
-            name: 'cancelMatch',
-            accounts: [
-                { name: 'matchAccount', isMut: true, isSigner: false },
-                { name: 'escrowVault', isMut: true, isSigner: false },
-                { name: 'host', isMut: true, isSigner: true },
-                { name: 'systemProgram', isMut: false, isSigner: false },
-            ],
-            args: [],
-        },
-        {
-            name: 'declareDraw',
-            accounts: [
-                { name: 'matchAccount', isMut: true, isSigner: false },
-                { name: 'escrowVault', isMut: true, isSigner: false },
-                { name: 'caller', isMut: true, isSigner: true },
-                { name: 'hostAccount', isMut: true, isSigner: false },
-                { name: 'challengerAccount', isMut: true, isSigner: false },
-                { name: 'systemProgram', isMut: false, isSigner: false },
-            ],
-            args: [],
-        },
-    ],
-    accounts: [
-        {
-            name: 'MatchAccount',
-            type: {
-                kind: 'struct',
-                fields: [
-                    { name: 'matchId', type: { array: ['u8', 32] } },
-                    { name: 'host', type: 'publicKey' },
-                    { name: 'challenger', type: 'publicKey' },
-                    { name: 'stakeAmount', type: 'u64' },
-                    { name: 'status', type: { defined: 'MatchStatus' } },
-                    { name: 'winner', type: 'publicKey' },
-                    { name: 'createdAt', type: 'i64' },
-                    { name: 'bump', type: 'u8' },
-                ],
-            },
-        },
-    ],
-    types: [
-        {
-            name: 'MatchStatus',
-            type: {
-                kind: 'enum',
-                variants: [
-                    { name: 'WaitingForChallenger' },
-                    { name: 'InProgress' },
-                    { name: 'Completed' },
-                    { name: 'Cancelled' },
-                    { name: 'Draw' },
-                ],
-            },
-        },
-    ],
-    events: [
-        { name: 'MatchCreated', fields: [
-            { name: 'matchId', type: { array: ['u8', 32] } },
-            { name: 'host', type: 'publicKey' },
-            { name: 'stakeAmount', type: 'u64' },
-        ]},
-        { name: 'MatchStarted', fields: [
-            { name: 'matchId', type: { array: ['u8', 32] } },
-            { name: 'host', type: 'publicKey' },
-            { name: 'challenger', type: 'publicKey' },
-            { name: 'totalPot', type: 'u64' },
-        ]},
-        { name: 'WinnerDeclared', fields: [
-            { name: 'matchId', type: { array: ['u8', 32] } },
-            { name: 'winner', type: 'publicKey' },
-            { name: 'declaredBy', type: 'publicKey' },
-        ]},
-        { name: 'RewardClaimed', fields: [
-            { name: 'matchId', type: { array: ['u8', 32] } },
-            { name: 'winner', type: 'publicKey' },
-            { name: 'amount', type: 'u64' },
-            { name: 'platformFee', type: 'u64' },
-        ]},
-        { name: 'MatchCancelled', fields: [
-            { name: 'matchId', type: { array: ['u8', 32] } },
-            { name: 'refundedTo', type: 'publicKey' },
-            { name: 'amount', type: 'u64' },
-        ]},
-        { name: 'MatchDraw', fields: [
-            { name: 'matchId', type: { array: ['u8', 32] } },
-            { name: 'refundAmount', type: 'u64' },
-        ]},
-    ],
-    errors: [
-        { code: 6000, name: 'StakeTooLow', msg: 'Stake amount is below minimum (0.01 SOL)' },
-        { code: 6001, name: 'StakeTooHigh', msg: 'Stake amount exceeds maximum (10 SOL)' },
-        { code: 6002, name: 'MatchNotJoinable', msg: 'Match is not joinable' },
-        { code: 6003, name: 'CannotPlaySelf', msg: 'Cannot play against yourself' },
-        { code: 6004, name: 'MatchNotInProgress', msg: 'Match is not in progress' },
-        { code: 6005, name: 'InvalidWinner', msg: 'Invalid winner address' },
-        { code: 6006, name: 'NotParticipant', msg: 'Caller is not a match participant' },
-        { code: 6007, name: 'MatchNotCompleted', msg: 'Match is not completed' },
-        { code: 6008, name: 'NotWinner', msg: 'Caller is not the winner' },
-        { code: 6009, name: 'CannotCancelStartedMatch', msg: 'Cannot cancel a match that has started' },
-        { code: 6010, name: 'NotHost', msg: 'Caller is not the host' },
-    ],
-} as const;
+// Export the IDL for use in the staking service
+export const STAKING_IDL = POKECHESS_STAKING_IDL;
 
 // Helper to convert room code to match ID bytes
 export function roomCodeToMatchId(roomCode: string): Uint8Array {

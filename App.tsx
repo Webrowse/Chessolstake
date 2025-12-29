@@ -356,7 +356,7 @@ const App: React.FC = () => {
         setValidDestinations([]);
     };
 
-    const startGame = (mode: GameMode, asHost: boolean = true, matchInfo?: { matchId: string; stakeAmount: number }) => {
+    const startGame = (mode: GameMode, asHost: boolean = true, _matchInfo?: { matchId: string; stakeAmount: number }) => {
         chessRef.current = new Chess();
         setGameMode(mode);
         setIsHost(asHost);
@@ -372,18 +372,8 @@ const App: React.FC = () => {
         setWhiteStrikes(0);
         setBlackStrikes(0);
 
-        if (matchInfo) {
-            setMatchId(matchInfo.matchId);
-            setStakeInfo({
-                matchId: matchInfo.matchId,
-                hostAddress: asHost ? publicKey?.toBase58() || '' : '',
-                challengerAddress: !asHost ? publicKey?.toBase58() || '' : null,
-                stakeAmountSol: matchInfo.stakeAmount,
-                totalPot: matchInfo.stakeAmount * 2,
-                status: 'active',
-                winner: null,
-            });
-        }
+        // Note: stakeInfo and matchId are set by handleMatchReady before calling this
+        // for staked_online mode, so we don't set them here
 
         setBoard(chessRef.current.board());
         setTurn(chessRef.current.turn());
@@ -398,11 +388,30 @@ const App: React.FC = () => {
         setShowStakeModal(true);
     };
 
-    const handleMatchReady = (matchInfo: { matchId: string; stakeAmount: number; isHost: boolean; peerConnection: DataConnection }) => {
+    const handleMatchReady = (matchInfo: {
+        matchId: string;
+        stakeAmount: number;
+        isHost: boolean;
+        peerConnection: DataConnection;
+        hostAddress: string;
+        challengerAddress: string;
+    }) => {
         setShowStakeModal(false);
 
         // Setup the peer connection for game communication
         setupPeerConnection(matchInfo.peerConnection);
+
+        // Store stake info with addresses from on-chain match
+        setStakeInfo({
+            matchId: matchInfo.matchId,
+            hostAddress: matchInfo.hostAddress,
+            challengerAddress: matchInfo.challengerAddress,
+            stakeAmountSol: matchInfo.stakeAmount,
+            totalPot: matchInfo.stakeAmount * 2,
+            status: 'active',
+            winner: null,
+        });
+        setMatchId(matchInfo.matchId);
 
         startGame('staked_online', matchInfo.isHost, matchInfo);
     };

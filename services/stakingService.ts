@@ -66,6 +66,16 @@ class StakingService {
     }
 
     /**
+     * Prepare a transaction with recent blockhash and fee payer
+     */
+    private async prepareTransaction(tx: Transaction, feePayer: PublicKey): Promise<Transaction> {
+        const { blockhash } = await this.connection.getLatestBlockhash();
+        tx.recentBlockhash = blockhash;
+        tx.feePayer = feePayer;
+        return tx;
+    }
+
+    /**
      * Create a new staked match
      */
     async createMatch(
@@ -91,7 +101,7 @@ class StakingService {
 
         const tx = await this.program.methods
             .createMatch(Array.from(matchIdBytes), new BN(stakeAmountLamports.toString()))
-            .accounts({
+            .accountsStrict({
                 matchAccount: matchPDA,
                 escrowVault: escrowPDA,
                 host: wallet.publicKey,
@@ -99,6 +109,7 @@ class StakingService {
             })
             .transaction();
 
+        await this.prepareTransaction(tx, wallet.publicKey);
         const signedTx = await wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         await this.connection.confirmTransaction(signature, 'confirmed');
@@ -123,7 +134,7 @@ class StakingService {
 
         const tx = await this.program.methods
             .joinMatch()
-            .accounts({
+            .accountsStrict({
                 matchAccount: matchPDA,
                 escrowVault: escrowPDA,
                 challenger: wallet.publicKey,
@@ -131,6 +142,7 @@ class StakingService {
             })
             .transaction();
 
+        await this.prepareTransaction(tx, wallet.publicKey);
         const signedTx = await wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         await this.connection.confirmTransaction(signature, 'confirmed');
@@ -154,12 +166,13 @@ class StakingService {
 
         const tx = await this.program.methods
             .declareWinner(params.winner)
-            .accounts({
+            .accountsStrict({
                 matchAccount: matchPDA,
                 caller: wallet.publicKey,
             })
             .transaction();
 
+        await this.prepareTransaction(tx, wallet.publicKey);
         const signedTx = await wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         await this.connection.confirmTransaction(signature, 'confirmed');
@@ -184,7 +197,7 @@ class StakingService {
 
         const tx = await this.program.methods
             .claimReward()
-            .accounts({
+            .accountsStrict({
                 matchAccount: matchPDA,
                 escrowVault: escrowPDA,
                 winner: wallet.publicKey,
@@ -193,6 +206,7 @@ class StakingService {
             })
             .transaction();
 
+        await this.prepareTransaction(tx, wallet.publicKey);
         const signedTx = await wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         await this.connection.confirmTransaction(signature, 'confirmed');
@@ -217,7 +231,7 @@ class StakingService {
 
         const tx = await this.program.methods
             .cancelMatch()
-            .accounts({
+            .accountsStrict({
                 matchAccount: matchPDA,
                 escrowVault: escrowPDA,
                 host: wallet.publicKey,
@@ -225,6 +239,7 @@ class StakingService {
             })
             .transaction();
 
+        await this.prepareTransaction(tx, wallet.publicKey);
         const signedTx = await wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         await this.connection.confirmTransaction(signature, 'confirmed');
@@ -251,7 +266,7 @@ class StakingService {
 
         const tx = await this.program.methods
             .declareDraw()
-            .accounts({
+            .accountsStrict({
                 matchAccount: matchPDA,
                 escrowVault: escrowPDA,
                 caller: wallet.publicKey,
@@ -261,6 +276,7 @@ class StakingService {
             })
             .transaction();
 
+        await this.prepareTransaction(tx, wallet.publicKey);
         const signedTx = await wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         await this.connection.confirmTransaction(signature, 'confirmed');

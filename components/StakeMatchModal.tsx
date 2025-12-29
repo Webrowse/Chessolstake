@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL, Transaction } from '@solana/web3.js';
+import { AnchorProvider } from '@coral-xyz/anchor';
 import Peer, { DataConnection } from 'peerjs';
 import {
     Coins,
@@ -13,10 +14,12 @@ import {
     RefreshCw,
     AlertCircle,
     Zap,
+    Shield,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { stakingService } from '../services/stakingService';
 
-type ModalStep = 'choose' | 'host' | 'join' | 'waiting' | 'joining';
+type ModalStep = 'choose' | 'host' | 'join' | 'waiting' | 'joining' | 'staking';
 
 interface StakeMatchModalProps {
     onMatchReady: (matchInfo: {
@@ -24,15 +27,18 @@ interface StakeMatchModalProps {
         stakeAmount: number;
         isHost: boolean;
         peerConnection: DataConnection;
+        hostAddress: string;
+        challengerAddress: string;
     }) => void;
     onCancel: () => void;
 }
 
 interface HandshakeMessage {
-    type: 'stake_info' | 'stake_accepted';
+    type: 'stake_info' | 'stake_accepted' | 'stake_confirmed';
     stakeAmount?: number;
     hostAddress?: string;
     joinerAddress?: string;
+    txSignature?: string; // On-chain transaction signature
 }
 
 const PRESET_AMOUNTS = [0.05, 0.1, 0.25, 0.5, 1];
@@ -49,30 +55,26 @@ const generateRoomCode = (): string => {
 // Prefix to namespace our peer IDs (alphanumeric only for PeerJS compatibility)
 const PEER_PREFIX = 'pkchess';
 
-// ICE servers for WebRTC NAT traversal
-const ICE_SERVERS = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
-    ],
-    sdpSemantics: 'unified-plan' as const,
+// PeerJS server configuration
+// Use local PeerJS server for development (run: npm run dev:peer)
+// Falls back to cloud server if local is not available
+const USE_LOCAL_PEER_SERVER = true;
+
+const PEER_OPTIONS = USE_LOCAL_PEER_SERVER ? {
+    host: 'localhost',
+    port: 9000,
+    path: '/',
+    debug: 2,
+} : {
+    debug: 2,
 };
 
-// PeerJS server configuration
-const PEER_SERVER_CONFIG = {
-    debug: 2,
-    config: ICE_SERVERS,
-};
 
 export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
     onMatchReady,
     onCancel,
 }) => {
-    const { publicKey } = useWallet();
+    const { publicKey, signTransaction } = useWallet();
     const { connection } = useConnection();
 
     const [step, setStep] = useState<ModalStep>('choose');
@@ -82,14 +84,41 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
+    const [stakingStatus, setStakingStatus] = useState<string>('');
 
     // For joiner - the host's stake amount they need to match
     const [hostStakeAmount, setHostStakeAmount] = useState<number | null>(null);
     const [hostAddress, setHostAddress] = useState<string | null>(null);
 
+    // On-chain transaction tracking (used for logging/debugging)
+    const [, setHostTxSignature] = useState<string | null>(null);
+    const [, setJoinerTxSignature] = useState<string | null>(null);
+
     // PeerJS refs
     const peerRef = useRef<Peer | null>(null);
     const connRef = useRef<DataConnection | null>(null);
+
+    // Initialize staking service with Anchor provider
+    const initializeStakingService = () => {
+        if (!publicKey || !signTransaction) return false;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const wallet: any = {
+            publicKey,
+            signTransaction,
+            signAllTransactions: async (txs: Transaction[]) => {
+                const signed = [];
+                for (const tx of txs) {
+                    signed.push(await signTransaction(tx));
+                }
+                return signed;
+            },
+        };
+
+        const provider = new AnchorProvider(connection, wallet, { commitment: 'confirmed' });
+        stakingService.initializeProgram(provider);
+        return true;
+    };
 
     // Cleanup peer on unmount or cancel
     useEffect(() => {
@@ -128,9 +157,9 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
         setTimeout(() => setCopied(false), 2000);
     };
 
-    // HOST: Create a peer with the room code as ID and wait for joiner
+    // HOST: Create on-chain match and then wait for joiner via PeerJS
     const handleCreateMatch = async () => {
-        if (!publicKey) return;
+        if (!publicKey || !signTransaction) return;
 
         const amount = parseFloat(stakeAmount);
         if (isNaN(amount) || amount < 0.01 || amount > 10) {
@@ -150,9 +179,36 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
 
         setIsLoading(true);
         setError(null);
+        setStep('staking');
+        setStakingStatus('Initializing staking service...');
 
         try {
-            // Create peer with room code as ID
+            // Initialize staking service
+            if (!initializeStakingService()) {
+                throw new Error('Failed to initialize staking service');
+            }
+
+            // Step 1: Create on-chain match (deposit stake to escrow)
+            setStakingStatus('Creating on-chain match...');
+            console.log('[Host] Creating on-chain match with stake:', amount, 'SOL');
+
+            const { signature, matchPDA } = await stakingService.createMatch(
+                {
+                    publicKey,
+                    signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
+                },
+                {
+                    matchId: roomCode.toUpperCase(),
+                    stakeAmountSol: amount,
+                }
+            );
+
+            console.log('[Host] On-chain match created! Signature:', signature, 'PDA:', matchPDA.toBase58());
+            setHostTxSignature(signature);
+            toast.success('Stake deposited on-chain!');
+
+            // Step 2: Create peer with room code as ID
+            setStakingStatus('Setting up P2P connection...');
             const peerId = PEER_PREFIX + roomCode.toUpperCase();
             console.log('[Host] Creating peer with ID:', peerId);
 
@@ -161,15 +217,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 peerRef.current.destroy();
             }
 
-            const peer = new Peer(peerId, {
-                debug: 2,
-                config: ICE_SERVERS,
-                // Use a more reliable server
-                host: '0.peerjs.com',
-                port: 443,
-                secure: true,
-                path: '/'
-            });
+            const peer = new Peer(peerId, PEER_OPTIONS);
             peerRef.current = peer;
 
             peer.on('open', (id) => {
@@ -183,7 +231,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 console.log('[Host] Incoming connection from:', conn.peer, 'open:', conn.open);
                 connRef.current = conn;
 
-                // Send stake info function
+                // Send stake info function (includes on-chain tx signature)
                 const sendStakeInfo = () => {
                     if (!conn.open) {
                         console.log('[Host] Connection not open yet, waiting...');
@@ -193,6 +241,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                         type: 'stake_info',
                         stakeAmount: amount,
                         hostAddress: publicKey.toBase58(),
+                        txSignature: signature, // Include on-chain tx signature for verification
                     };
                     console.log('[Host] Sending stake info:', stakeInfo);
                     try {
@@ -207,14 +256,18 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 conn.on('data', (data) => {
                     console.log('[Host] Received data:', data);
                     const msg = data as HandshakeMessage;
-                    if (msg.type === 'stake_accepted') {
-                        console.log('[Host] Joiner accepted! Starting game...');
+                    if (msg.type === 'stake_confirmed' && msg.joinerAddress && msg.txSignature) {
+                        // Joiner has staked on-chain and confirmed
+                        console.log('[Host] Joiner staked and confirmed! Starting game...');
+                        setJoinerTxSignature(msg.txSignature);
                         toast.success('Opponent joined! Game starting...');
                         onMatchReady({
                             matchId: roomCode,
                             stakeAmount: amount,
                             isHost: true,
                             peerConnection: conn,
+                            hostAddress: publicKey.toBase58(),
+                            challengerAddress: msg.joinerAddress,
                         });
                     }
                 });
@@ -245,13 +298,17 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     let attempts = 0;
                     const pollInterval = setInterval(() => {
                         attempts++;
-                        console.log('[Host] Polling attempt', attempts, 'conn.open:', conn.open);
-                        if (conn.open) {
+                        // Access the underlying data channel to check its state
+                        const dc = (conn as any).dataChannel;
+                        const dcState = dc?.readyState || 'no-dc';
+                        console.log('[Host] Polling attempt', attempts, 'conn.open:', conn.open, 'dataChannel:', dcState);
+
+                        if (conn.open || dcState === 'open') {
                             clearInterval(pollInterval);
                             sendStakeInfo();
-                        } else if (attempts > 20) {
+                        } else if (attempts > 40) {
                             clearInterval(pollInterval);
-                            console.log('[Host] Gave up polling after 20 attempts');
+                            console.log('[Host] Gave up polling after 40 attempts');
                         }
                     }, 250);
                 }
@@ -260,6 +317,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
             peer.on('error', (err: any) => {
                 console.error('[Host] Peer error:', err.type, err);
                 setIsLoading(false);
+                setStep('host');
 
                 if (err.type === 'unavailable-id') {
                     setError('This room code is already in use. Try a different one.');
@@ -281,6 +339,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
             console.error('[Host] Exception:', err);
             setError(err.message || 'Failed to create match');
             setIsLoading(false);
+            setStep('host');
         }
     };
 
@@ -305,15 +364,8 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 peerRef.current.destroy();
             }
 
-            // Create our own peer first with debug enabled
-            const peer = new Peer({
-                debug: 2,
-                config: ICE_SERVERS,
-                host: '0.peerjs.com',
-                port: 443,
-                secure: true,
-                path: '/'
-            });
+            // Create our own peer first
+            const peer = new Peer(PEER_OPTIONS);
             peerRef.current = peer;
 
             let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -323,13 +375,10 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 console.log('[Joiner] Our peer ready with ID:', myId, '- now connecting to host:', hostPeerId);
 
                 // Now connect to the host
-                const conn = peer.connect(hostPeerId, {
-                    reliable: true,
-                    serialization: 'json'
-                });
+                const conn = peer.connect(hostPeerId);
                 connRef.current = conn;
 
-                // Set a timeout for connection - 15 seconds
+                // Set a timeout for connection - 20 seconds
                 connectionTimeout = setTimeout(() => {
                     if (!hasConnected) {
                         console.log('[Joiner] Connection timeout - no response from host');
@@ -337,7 +386,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                         setIsLoading(false);
                         conn.close();
                     }
-                }, 15000);
+                }, 20000);
 
                 conn.on('open', () => {
                     console.log('[Joiner] Connection opened to host!');
@@ -378,6 +427,29 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                         setIsLoading(false);
                     }
                 });
+
+                // Poll for connection open state on joiner side too
+                // PeerJS sometimes doesn't fire the 'open' event reliably
+                let pollAttempts = 0;
+                const pollInterval = setInterval(() => {
+                    pollAttempts++;
+                    // Access the underlying data channel to check its state
+                    const dc = (conn as any).dataChannel;
+                    const dcState = dc?.readyState || 'no-dc';
+                    console.log('[Joiner] Poll attempt', pollAttempts, 'conn.open:', conn.open, 'dataChannel:', dcState);
+
+                    if (conn.open || dcState === 'open') {
+                        clearInterval(pollInterval);
+                        if (!hasConnected) {
+                            console.log('[Joiner] Detected open connection via polling');
+                            hasConnected = true;
+                            if (connectionTimeout) clearTimeout(connectionTimeout);
+                        }
+                    } else if (pollAttempts > 40) { // 10 seconds of polling
+                        clearInterval(pollInterval);
+                        console.log('[Joiner] Gave up polling after 40 attempts');
+                    }
+                }, 250);
             });
 
             peer.on('error', (err: any) => {
@@ -408,7 +480,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
     };
 
     const handleJoinMatch = async () => {
-        if (!publicKey || hostStakeAmount === null || !connRef.current) return;
+        if (!publicKey || !signTransaction || hostStakeAmount === null || !connRef.current || !hostAddress) return;
 
         if (balance !== null && hostStakeAmount > balance) {
             setError('Insufficient balance to match stake');
@@ -417,15 +489,42 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
 
         setIsLoading(true);
         setError(null);
+        setStep('staking');
+        setStakingStatus('Initializing staking service...');
 
         try {
-            // Send acceptance to host
-            const acceptance: HandshakeMessage = {
-                type: 'stake_accepted',
+            // Initialize staking service
+            if (!initializeStakingService()) {
+                throw new Error('Failed to initialize staking service');
+            }
+
+            // Step 1: Join on-chain match (deposit matching stake to escrow)
+            setStakingStatus('Joining on-chain match...');
+            console.log('[Joiner] Joining on-chain match with stake:', hostStakeAmount, 'SOL');
+
+            const signature = await stakingService.joinMatch(
+                {
+                    publicKey,
+                    signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
+                },
+                {
+                    matchId: roomCode.toUpperCase(),
+                }
+            );
+
+            console.log('[Joiner] On-chain join successful! Signature:', signature);
+            setJoinerTxSignature(signature);
+            toast.success('Stake deposited on-chain!');
+
+            // Step 2: Send confirmation to host with our tx signature
+            setStakingStatus('Confirming with host...');
+            const confirmation: HandshakeMessage = {
+                type: 'stake_confirmed',
                 joinerAddress: publicKey.toBase58(),
+                txSignature: signature,
             };
-            connRef.current.send(acceptance);
-            console.log('[Joiner] Sent acceptance');
+            connRef.current.send(confirmation);
+            console.log('[Joiner] Sent stake confirmation');
 
             toast.success('Joined match! Game starting...');
             onMatchReady({
@@ -433,10 +532,14 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 stakeAmount: hostStakeAmount,
                 isHost: false,
                 peerConnection: connRef.current,
+                hostAddress: hostAddress,
+                challengerAddress: publicKey.toBase58(),
             });
         } catch (err: any) {
+            console.error('[Joiner] Exception:', err);
             setError(err.message || 'Failed to join match');
             setIsLoading(false);
+            setStep('joining');
         }
     };
 
@@ -796,6 +899,35 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
         </div>
     );
 
+    const renderStakingStep = () => (
+        <div className="space-y-6 text-center">
+            <div className="py-8">
+                <div className="relative inline-block">
+                    <Shield className="w-16 h-16 text-purple-500 mx-auto animate-pulse" />
+                    <Loader2 className="w-8 h-8 text-purple-400 animate-spin absolute -bottom-1 -right-1" />
+                </div>
+                <h3 className="text-xl font-bold text-white mt-6 mb-2">Processing On-Chain</h3>
+                <p className="text-slate-400">{stakingStatus}</p>
+            </div>
+
+            {/* Transaction Progress */}
+            <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">Status</span>
+                    <span className="text-purple-400 font-medium flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {stakingStatus}
+                    </span>
+                </div>
+            </div>
+
+            <p className="text-slate-500 text-sm">
+                Please confirm the transaction in your wallet.
+                <br />Your stake will be held in escrow until the game ends.
+            </p>
+        </div>
+    );
+
     const getTitle = () => {
         switch (step) {
             case 'choose': return 'Stake Match';
@@ -803,6 +935,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
             case 'waiting': return 'Waiting for Opponent';
             case 'join': return 'Join a Match';
             case 'joining': return 'Confirm Match';
+            case 'staking': return 'Depositing Stake';
         }
     };
 
@@ -836,10 +969,11 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     {step === 'waiting' && renderWaitingStep()}
                     {step === 'join' && renderJoinStep()}
                     {step === 'joining' && renderJoiningStep()}
+                    {step === 'staking' && renderStakingStep()}
                 </div>
 
-                {/* Back button for non-choose steps */}
-                {step !== 'choose' && step !== 'waiting' && (
+                {/* Back button for non-choose steps (not during staking or waiting) */}
+                {step !== 'choose' && step !== 'waiting' && step !== 'staking' && (
                     <div className="px-6 pb-6">
                         <button
                             onClick={() => {
