@@ -1,5 +1,0 @@
-{
-  "name": "PokeChess",
-  "description": "A fully functional chess game where pieces are represented by Pokemon characters. Play against a Gemini-powered AI opponent that adopts the persona of a rival Pokemon trainer.",
-  "requestFramePermissions": []
-}
