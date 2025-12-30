@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
@@ -12,6 +12,19 @@ export const WalletButton: React.FC = () => {
     const [showDropdown, setShowDropdown] = useState(false);
     const [copied, setCopied] = useState(false);
     const [isLoadingBalance, setIsLoadingBalance] = useState(false);
+
+    // Track adapter readiness to avoid evaluating connected state too early
+    // Chrome's late provider injection can cause false "disconnected" during initial mount
+    const [isAdapterReady, setIsAdapterReady] = useState(false);
+
+    // Wait a brief moment before trusting the connected state
+    // This handles Chrome's late provider injection timing
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setIsAdapterReady(true);
+        }, 150);
+        return () => clearTimeout(timer);
+    }, []);
 
     // Fetch balance when connected
     const fetchBalance = useCallback(async () => {
@@ -72,6 +85,20 @@ export const WalletButton: React.FC = () => {
     const truncateAddress = (address: string) => {
         return `${address.slice(0, 4)}...${address.slice(-4)}`;
     };
+
+    // Show loading state during initial adapter readiness check
+    // This prevents showing "Connect Wallet" button when wallet might auto-connect
+    if (!isAdapterReady && !connected && !connecting) {
+        return (
+            <button
+                disabled
+                className="flex items-center gap-2 bg-gradient-to-r from-purple-600/50 to-indigo-600/50 text-white/70 px-4 py-2 rounded-xl font-semibold shadow-lg border border-purple-400/20 cursor-wait"
+            >
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Initializing...</span>
+            </button>
+        );
+    }
 
     // Not connected - show connect button
     if (!connected) {

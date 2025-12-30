@@ -98,30 +98,17 @@ export const GameEndModal: React.FC<GameEndModalProps> = ({
                 throw new Error('Failed to initialize staking service');
             }
 
-            console.log('[GameEndModal] Declaring winner for match:', matchId);
+            console.log('[GameEndModal] Claiming winner reward for match:', matchId);
             console.log('[GameEndModal] Winner address:', publicKey.toBase58());
 
-            // First declare the winner on-chain
-            await stakingService.declareWinner(
+            // Use the new combined instruction - ONE transaction, ONE signature!
+            const signature = await stakingService.claimWinnerReward(
                 {
                     publicKey,
                     signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
                 },
-                {
-                    matchId: matchId.toUpperCase(),
-                    winner: publicKey,
-                }
-            );
-
-            console.log('[GameEndModal] Winner declared, now claiming reward...');
-
-            // Then claim the reward
-            const signature = await stakingService.claimReward(
-                {
-                    publicKey,
-                    signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
-                },
-                matchId.toUpperCase()
+                matchId.toUpperCase(),
+                publicKey // winner is the caller
             );
 
             console.log('[GameEndModal] Reward claimed! Signature:', signature);

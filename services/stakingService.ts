@@ -151,7 +151,46 @@ class StakingService {
     }
 
     /**
-     * Declare the winner of a match
+     * Claim winner reward - declares winner AND distributes rewards in ONE transaction
+     * Only requires ONE signature from the caller (participant)
+     * The winner does NOT need to sign - we're just sending SOL to them
+     */
+    async claimWinnerReward(
+        wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
+        matchId: string,
+        winner: PublicKey
+    ): Promise<string> {
+        if (!this.program) {
+            throw new Error('Program not initialized. Call initializeProgram first.');
+        }
+
+        const matchIdBytes = roomCodeToMatchId(matchId);
+        const [matchPDA] = this.getMatchPDA(matchIdBytes);
+        const [escrowPDA] = this.getEscrowPDA(matchIdBytes);
+
+        const tx = await this.program.methods
+            .claimWinnerReward(winner)
+            .accountsStrict({
+                matchAccount: matchPDA,
+                escrowVault: escrowPDA,
+                caller: wallet.publicKey,
+                winnerAccount: winner,
+                platformTreasury: getPlatformTreasury(),
+                systemProgram: SystemProgram.programId,
+            })
+            .transaction();
+
+        await this.prepareTransaction(tx, wallet.publicKey);
+        const signedTx = await wallet.signTransaction(tx);
+        const signature = await this.connection.sendRawTransaction(signedTx.serialize());
+        await this.connection.confirmTransaction(signature, 'confirmed');
+
+        return signature;
+    }
+
+    /**
+     * @deprecated Use claimWinnerReward instead - it combines both operations in one tx
+     * Declare the winner of a match (requires separate claimReward call)
      */
     async declareWinner(
         wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },
@@ -181,7 +220,8 @@ class StakingService {
     }
 
     /**
-     * Claim reward as the winner
+     * @deprecated Use claimWinnerReward instead - it combines both operations in one tx
+     * Claim reward as the winner (requires declareWinner to be called first)
      */
     async claimReward(
         wallet: { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction> },

@@ -8,7 +8,8 @@ import POKECHESS_STAKING_IDL from './pokechess_staking_idl.json';
 
 // Program ID - deployed to Devnet (lazy initialization to avoid polyfill timing issues)
 const STAKING_PROGRAM_ID_STR = 'B5jR7EVRTkbJBc7zmRXmMAW1EwYpS9MfniGtRGxPoZ3u';
-const PLATFORM_TREASURY_STR = '11111111111111111111111111111111';
+// Platform treasury wallet address - receives 2.5% fee from each match
+const PLATFORM_TREASURY_STR = 'CtyKE4xLkGGQkgyD6GfJP67WgjozeQrUumDZVbiV9QDZ';
 
 let _stakingProgramId: PublicKey | null = null;
 let _platformTreasury: PublicKey | null = null;

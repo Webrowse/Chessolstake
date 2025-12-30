@@ -110,9 +110,91 @@ pub mod pokechess_staking {
         Ok(())
     }
 
-    /// Declares the winner and distributes rewards
-    /// Can only be called by the host or challenger (honest reporting)
-    /// In production, this would use an oracle or trusted arbiter
+    /// Declares the winner and immediately distributes rewards in ONE transaction
+    /// The winner account does NOT need to sign - we're just sending SOL to them
+    /// Can only be called by a match participant (honest reporting)
+    pub fn claim_winner_reward(ctx: Context<ClaimWinnerReward>, winner: Pubkey) -> Result<()> {
+        let match_account = &mut ctx.accounts.match_account;
+
+        require!(
+            match_account.status == MatchStatus::InProgress,
+            StakingError::MatchNotInProgress
+        );
+        require!(
+            winner == match_account.host || winner == match_account.challenger,
+            StakingError::InvalidWinner
+        );
+
+        // Verify caller is a participant
+        let caller = ctx.accounts.caller.key();
+        require!(
+            caller == match_account.host || caller == match_account.challenger,
+            StakingError::NotParticipant
+        );
+
+        // Verify winner account matches the declared winner
+        require!(
+            ctx.accounts.winner_account.key() == winner,
+            StakingError::InvalidWinner
+        );
+
+        // Update match state
+        match_account.winner = winner;
+        match_account.status = MatchStatus::Completed;
+
+        // Calculate payouts
+        let total_pot = match_account.stake_amount * 2;
+        let platform_fee = (total_pot * PLATFORM_FEE_BPS) / 10_000;
+        let winner_reward = total_pot - platform_fee;
+        let match_id = match_account.match_id;
+
+        // Get the escrow bump for signing
+        let escrow_bump = ctx.bumps.escrow_vault;
+        let escrow_seeds = &[
+            b"escrow".as_ref(),
+            match_id.as_ref(),
+            &[escrow_bump],
+        ];
+        let signer_seeds = &[&escrow_seeds[..]];
+
+        // Transfer winner reward - winner does NOT need to sign!
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.winner_account.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            winner_reward,
+        )?;
+
+        // Transfer platform fee to treasury
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.platform_treasury.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            platform_fee,
+        )?;
+
+        emit!(RewardClaimed {
+            match_id,
+            winner,
+            amount: winner_reward,
+            platform_fee,
+        });
+
+        Ok(())
+    }
+
+    /// DEPRECATED: Use claim_winner_reward instead
+    /// Kept for backwards compatibility
     pub fn declare_winner(ctx: Context<DeclareWinner>, winner: Pubkey) -> Result<()> {
         let match_account = &mut ctx.accounts.match_account;
 
@@ -144,7 +226,8 @@ pub mod pokechess_staking {
         Ok(())
     }
 
-    /// Winner claims the reward from escrow
+    /// DEPRECATED: Use claim_winner_reward instead
+    /// Kept for backwards compatibility
     pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
         let match_account = &ctx.accounts.match_account;
 
@@ -161,16 +244,42 @@ pub mod pokechess_staking {
         let platform_fee = (total_pot * PLATFORM_FEE_BPS) / 10_000;
         let winner_reward = total_pot - platform_fee;
 
-        // Transfer reward to winner
         let match_id = match_account.match_id;
 
-        // Transfer winner reward
-        **ctx.accounts.escrow_vault.to_account_info().try_borrow_mut_lamports()? -= winner_reward;
-        **ctx.accounts.winner.to_account_info().try_borrow_mut_lamports()? += winner_reward;
+        // Get the escrow bump for signing
+        let escrow_bump = ctx.bumps.escrow_vault;
+        let escrow_seeds = &[
+            b"escrow".as_ref(),
+            match_id.as_ref(),
+            &[escrow_bump],
+        ];
+        let signer_seeds = &[&escrow_seeds[..]];
 
-        // Transfer platform fee to treasury
-        **ctx.accounts.escrow_vault.to_account_info().try_borrow_mut_lamports()? -= platform_fee;
-        **ctx.accounts.platform_treasury.to_account_info().try_borrow_mut_lamports()? += platform_fee;
+        // Transfer winner reward using CPI with PDA signature
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.winner.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            winner_reward,
+        )?;
+
+        // Transfer platform fee to treasury using CPI with PDA signature
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.platform_treasury.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            platform_fee,
+        )?;
 
         emit!(RewardClaimed {
             match_id,
@@ -196,13 +305,32 @@ pub mod pokechess_staking {
         );
 
         let stake_amount = match_account.stake_amount;
+        let match_id = match_account.match_id;
 
-        // Refund host
-        **ctx.accounts.escrow_vault.to_account_info().try_borrow_mut_lamports()? -= stake_amount;
-        **ctx.accounts.host.to_account_info().try_borrow_mut_lamports()? += stake_amount;
+        // Get the escrow bump for signing
+        let escrow_bump = ctx.bumps.escrow_vault;
+        let escrow_seeds = &[
+            b"escrow".as_ref(),
+            match_id.as_ref(),
+            &[escrow_bump],
+        ];
+        let signer_seeds = &[&escrow_seeds[..]];
+
+        // Refund host using CPI with PDA signature
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.host.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            stake_amount,
+        )?;
 
         emit!(MatchCancelled {
-            match_id: match_account.match_id,
+            match_id,
             refunded_to: ctx.accounts.host.key(),
             amount: stake_amount,
         });
@@ -227,16 +355,45 @@ pub mod pokechess_staking {
 
         match_account.status = MatchStatus::Draw;
         let stake_amount = match_account.stake_amount;
+        let match_id = match_account.match_id;
 
-        // Refund both players
-        **ctx.accounts.escrow_vault.to_account_info().try_borrow_mut_lamports()? -= stake_amount;
-        **ctx.accounts.host_account.to_account_info().try_borrow_mut_lamports()? += stake_amount;
+        // Get the escrow bump for signing
+        let escrow_bump = ctx.bumps.escrow_vault;
+        let escrow_seeds = &[
+            b"escrow".as_ref(),
+            match_id.as_ref(),
+            &[escrow_bump],
+        ];
+        let signer_seeds = &[&escrow_seeds[..]];
 
-        **ctx.accounts.escrow_vault.to_account_info().try_borrow_mut_lamports()? -= stake_amount;
-        **ctx.accounts.challenger_account.to_account_info().try_borrow_mut_lamports()? += stake_amount;
+        // Refund host using CPI with PDA signature
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.host_account.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            stake_amount,
+        )?;
+
+        // Refund challenger using CPI with PDA signature
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.challenger_account.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            stake_amount,
+        )?;
 
         emit!(MatchDraw {
-            match_id: match_account.match_id,
+            match_id,
             refund_amount: stake_amount,
         });
 
@@ -265,8 +422,8 @@ pub struct CreateMatch<'info> {
         seeds = [b"escrow", match_id.as_ref()],
         bump
     )]
-    /// CHECK: This is a PDA used as escrow vault
-    pub escrow_vault: AccountInfo<'info>,
+    /// CHECK: This is a PDA used as escrow vault - receives SOL transfers
+    pub escrow_vault: SystemAccount<'info>,
 
     #[account(mut)]
     pub host: Signer<'info>,
@@ -288,8 +445,8 @@ pub struct JoinMatch<'info> {
         seeds = [b"escrow", match_account.match_id.as_ref()],
         bump
     )]
-    /// CHECK: This is a PDA used as escrow vault
-    pub escrow_vault: AccountInfo<'info>,
+    /// CHECK: This is a PDA used as escrow vault - receives SOL transfers
+    pub escrow_vault: SystemAccount<'info>,
 
     #[account(mut)]
     pub challenger: Signer<'info>,
@@ -297,6 +454,42 @@ pub struct JoinMatch<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// New combined instruction: declare winner + distribute rewards in ONE tx
+/// Winner does NOT need to sign - only the caller (participant) signs
+#[derive(Accounts)]
+pub struct ClaimWinnerReward<'info> {
+    #[account(
+        mut,
+        seeds = [b"match", match_account.match_id.as_ref()],
+        bump = match_account.bump,
+        close = caller
+    )]
+    pub match_account: Account<'info, MatchAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", match_account.match_id.as_ref()],
+        bump
+    )]
+    /// CHECK: PDA escrow vault holding the staked SOL
+    pub escrow_vault: SystemAccount<'info>,
+
+    /// The caller (must be host or challenger) - this is the ONLY signer needed
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    /// CHECK: The winner's account - does NOT need to sign, just receives SOL
+    #[account(mut)]
+    pub winner_account: SystemAccount<'info>,
+
+    /// CHECK: Platform treasury for fees
+    #[account(mut)]
+    pub platform_treasury: SystemAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// DEPRECATED: Use ClaimWinnerReward instead
 #[derive(Accounts)]
 pub struct DeclareWinner<'info> {
     #[account(
@@ -310,6 +503,7 @@ pub struct DeclareWinner<'info> {
     pub caller: Signer<'info>,
 }
 
+/// DEPRECATED: Use ClaimWinnerReward instead
 #[derive(Accounts)]
 pub struct ClaimReward<'info> {
     #[account(
@@ -325,15 +519,15 @@ pub struct ClaimReward<'info> {
         seeds = [b"escrow", match_account.match_id.as_ref()],
         bump
     )]
-    /// CHECK: This is a PDA used as escrow vault
-    pub escrow_vault: AccountInfo<'info>,
+    /// CHECK: This is a PDA used as escrow vault - holds SOL for distribution
+    pub escrow_vault: SystemAccount<'info>,
 
     #[account(mut)]
     pub winner: Signer<'info>,
 
-    /// CHECK: Platform treasury for fees
+    /// CHECK: Platform treasury for fees - validated off-chain
     #[account(mut)]
-    pub platform_treasury: AccountInfo<'info>,
+    pub platform_treasury: SystemAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -353,8 +547,8 @@ pub struct CancelMatch<'info> {
         seeds = [b"escrow", match_account.match_id.as_ref()],
         bump
     )]
-    /// CHECK: This is a PDA used as escrow vault
-    pub escrow_vault: AccountInfo<'info>,
+    /// CHECK: This is a PDA used as escrow vault - holds SOL for refund
+    pub escrow_vault: SystemAccount<'info>,
 
     #[account(mut)]
     pub host: Signer<'info>,
@@ -377,19 +571,19 @@ pub struct DeclareDraw<'info> {
         seeds = [b"escrow", match_account.match_id.as_ref()],
         bump
     )]
-    /// CHECK: This is a PDA used as escrow vault
-    pub escrow_vault: AccountInfo<'info>,
+    /// CHECK: This is a PDA used as escrow vault - holds SOL for refund
+    pub escrow_vault: SystemAccount<'info>,
 
     #[account(mut)]
     pub caller: Signer<'info>,
 
-    /// CHECK: Host account for refund
+    /// CHECK: Host account for refund - validated by address constraint
     #[account(mut, address = match_account.host)]
-    pub host_account: AccountInfo<'info>,
+    pub host_account: SystemAccount<'info>,
 
-    /// CHECK: Challenger account for refund
+    /// CHECK: Challenger account for refund - validated by address constraint
     #[account(mut, address = match_account.challenger)]
-    pub challenger_account: AccountInfo<'info>,
+    pub challenger_account: SystemAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }

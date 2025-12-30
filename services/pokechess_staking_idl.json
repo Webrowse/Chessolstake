@@ -97,7 +97,8 @@
     {
       "name": "claim_reward",
       "docs": [
-        "Winner claims the reward from escrow"
+        "DEPRECATED: Use claim_winner_reward instead",
+        "Kept for backwards compatibility"
       ],
       "discriminator": [
         149,
@@ -172,6 +173,99 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "claim_winner_reward",
+      "docs": [
+        "Declares the winner and immediately distributes rewards in ONE transaction",
+        "The winner account does NOT need to sign - we're just sending SOL to them",
+        "Can only be called by a match participant (honest reporting)"
+      ],
+      "discriminator": [
+        123,
+        249,
+        94,
+        48,
+        9,
+        62,
+        0,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "caller",
+          "docs": [
+            "The caller (must be host or challenger) - this is the ONLY signer needed"
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "winner_account",
+          "writable": true
+        },
+        {
+          "name": "platform_treasury",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "winner",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "create_match",
@@ -346,9 +440,8 @@
     {
       "name": "declare_winner",
       "docs": [
-        "Declares the winner and distributes rewards",
-        "Can only be called by the host or challenger (honest reporting)",
-        "In production, this would use an oracle or trusted arbiter"
+        "DEPRECATED: Use claim_winner_reward instead",
+        "Kept for backwards compatibility"
       ],
       "discriminator": [
         140,
