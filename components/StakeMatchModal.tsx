@@ -244,36 +244,44 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                 connRef.current = conn;
 
                 let stakeInfoSent = false;
+                let sendAttempts = 0;
+                const maxAttempts = 10;
 
-                // Send stake info function (includes on-chain tx signature)
+                // Send stake info function with retry logic
                 const sendStakeInfo = () => {
                     if (stakeInfoSent) {
                         console.log('[Host] Stake info already sent, skipping');
                         return;
                     }
+
+                    sendAttempts++;
                     const stakeInfo: HandshakeMessage = {
                         type: 'stake_info',
                         stakeAmount: amount,
                         hostAddress: publicKey.toBase58(),
                         txSignature: signature,
                     };
-                    console.log('[Host] Sending stake info:', stakeInfo);
+                    console.log('[Host] Sending stake info (attempt ' + sendAttempts + '):', stakeInfo);
                     try {
                         conn.send(stakeInfo);
                         stakeInfoSent = true;
                         console.log('[Host] Stake info sent successfully');
                     } catch (e) {
                         console.error('[Host] Failed to send stake info:', e);
+                        // Retry if connection might still be establishing
+                        if (sendAttempts < maxAttempts) {
+                            setTimeout(sendStakeInfo, 500);
+                        }
                     }
                 };
 
                 // Set up data handler first
                 conn.on('data', (data) => {
                     console.log('[Host] Received data:', data);
-                    const msg = data as HandshakeMessage;
-                    if (msg.type === 'stake_confirmed' && msg.joinerAddress && msg.txSignature) {
+                    const msg = data as HandshakeMessage | { type: string };
+                    if (msg.type === 'stake_confirmed' && 'joinerAddress' in msg && 'txSignature' in msg) {
                         console.log('[Host] Joiner staked and confirmed! Starting game...');
-                        setJoinerTxSignature(msg.txSignature);
+                        setJoinerTxSignature(msg.txSignature as string);
                         toast.success('Opponent joined! Game starting...');
                         onMatchReady({
                             matchId: roomCode,
@@ -281,16 +289,18 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                             isHost: true,
                             peerConnection: conn,
                             hostAddress: publicKey.toBase58(),
-                            challengerAddress: msg.joinerAddress,
+                            challengerAddress: msg.joinerAddress as string,
                         });
+                    } else if (msg.type === 'request_stake_info') {
+                        // Joiner is requesting stake info, resend it
+                        console.log('[Host] Joiner requested stake info, resending...');
+                        stakeInfoSent = false; // Reset to allow resend
+                        sendStakeInfo();
                     }
                 });
 
                 conn.on('close', () => {
                     console.log('[Host] Connection closed');
-                    if (step === 'waiting') {
-                        toast.error('Opponent disconnected');
-                    }
                 });
 
                 conn.on('error', (err) => {
@@ -302,23 +312,30 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     sendStakeInfo();
                 });
 
-                // Also listen for the underlying peerConnection's datachannel event
-                const peerConnection = (conn as any).peerConnection as RTCPeerConnection | undefined;
-                if (peerConnection) {
-                    console.log('[Host] Found peerConnection, listening for datachannel');
-                    peerConnection.ondatachannel = (event) => {
-                        console.log('[Host] DataChannel received:', event.channel.label, 'state:', event.channel.readyState);
-                        event.channel.onopen = () => {
-                            console.log('[Host] DataChannel opened via event');
-                            // Give PeerJS a moment to update conn.open
-                            setTimeout(() => {
-                                if (conn.open) {
-                                    sendStakeInfo();
-                                }
-                            }, 100);
-                        };
-                    };
-                }
+                // Poll for connection readiness and send stake info
+                let pollAttempts = 0;
+                const pollInterval = setInterval(() => {
+                    pollAttempts++;
+                    const dc = (conn as any).dataChannel as RTCDataChannel | undefined;
+
+                    console.log('[Host] Poll #' + pollAttempts,
+                        'conn.open:', conn.open,
+                        'dc:', dc ? dc.readyState : 'none'
+                    );
+
+                    if (conn.open || (dc && dc.readyState === 'open')) {
+                        console.log('[Host] Connection ready via polling, sending stake info');
+                        sendStakeInfo();
+                        if (stakeInfoSent) {
+                            clearInterval(pollInterval);
+                        }
+                    }
+
+                    if (pollAttempts > 40) { // 10 seconds
+                        clearInterval(pollInterval);
+                        console.log('[Host] Gave up polling after 40 attempts');
+                    }
+                }, 250);
 
                 // If already open, send immediately
                 if (conn.open) {
@@ -421,10 +438,29 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     }
                 }, 20000);
 
+                let receivedStakeInfo = false;
+
+                // Request stake info from host if we're connected but haven't received it
+                const requestStakeInfo = () => {
+                    if (receivedStakeInfo) return;
+                    console.log('[Joiner] Requesting stake info from host');
+                    try {
+                        conn.send({ type: 'request_stake_info' });
+                    } catch (e) {
+                        console.error('[Joiner] Failed to request stake info:', e);
+                    }
+                };
+
                 conn.on('open', () => {
                     console.log('[Joiner] Connection open event fired!');
                     hasConnected = true;
                     if (connectionTimeout) clearTimeout(connectionTimeout);
+                    // Request stake info after a short delay (host might be sending it already)
+                    setTimeout(() => {
+                        if (!receivedStakeInfo) {
+                            requestStakeInfo();
+                        }
+                    }, 500);
                 });
 
                 conn.on('data', (data) => {
@@ -434,6 +470,7 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     const msg = data as HandshakeMessage;
                     if (msg.type === 'stake_info') {
                         console.log('[Joiner] Received stake info:', msg);
+                        receivedStakeInfo = true;
                         setHostStakeAmount(msg.stakeAmount || 0);
                         setHostAddress(msg.hostAddress || null);
                         setStep('joining');
@@ -492,8 +529,9 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                     }
                 };
 
-                // Poll for data channel creation
+                // Poll for data channel creation and request stake info
                 let pollAttempts = 0;
+                let lastRequestAttempt = 0;
                 const pollInterval = setInterval(() => {
                     pollAttempts++;
                     const dc = (conn as any).dataChannel as RTCDataChannel | undefined;
@@ -503,18 +541,31 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                         'conn.open:', conn.open,
                         'dc:', dc ? dc.readyState : 'none',
                         'pc:', pc ? pc.connectionState : 'none',
-                        'ice:', pc ? pc.iceConnectionState : 'none'
+                        'ice:', pc ? pc.iceConnectionState : 'none',
+                        'receivedStakeInfo:', receivedStakeInfo
                     );
 
                     if (dc && !dc.onopen) {
                         checkDataChannel();
                     }
 
-                    if (conn.open || (dc && dc.readyState === 'open')) {
-                        clearInterval(pollInterval);
-                        console.log('[Joiner] Connection ready via polling');
+                    const isConnected = conn.open || (dc && dc.readyState === 'open');
+
+                    if (isConnected) {
                         hasConnected = true;
                         if (connectionTimeout) clearTimeout(connectionTimeout);
+
+                        // If connected but no stake info yet, request it periodically
+                        if (!receivedStakeInfo && pollAttempts - lastRequestAttempt >= 4) { // Every 1 second
+                            lastRequestAttempt = pollAttempts;
+                            requestStakeInfo();
+                        }
+                    }
+
+                    // Stop polling once we have stake info or timeout
+                    if (receivedStakeInfo) {
+                        clearInterval(pollInterval);
+                        console.log('[Joiner] Received stake info, stopping poll');
                     } else if (pollAttempts > 60) { // 15 seconds of polling
                         clearInterval(pollInterval);
                         console.log('[Joiner] Gave up polling after 60 attempts');
