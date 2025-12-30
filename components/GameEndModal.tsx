@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { PublicKey, Transaction } from '@solana/web3.js';
+import { AnchorProvider } from '@coral-xyz/anchor';
 import {
     Trophy,
     Frown,
@@ -10,16 +12,27 @@ import {
     Sparkles,
     X
 } from 'lucide-react';
-import { simpleStakingService, SimpleStakeInfo } from '../services/simpleStaking';
+import { stakingService } from '../services/stakingService';
 import { toast } from 'react-hot-toast';
 import confetti from 'canvas-confetti';
+
+// Stake info interface for game end modal
+export interface GameStakeInfo {
+    matchId: string;
+    hostAddress: string;
+    challengerAddress: string | null;
+    stakeAmountSol: number;
+    totalPot: number;
+    status: 'waiting' | 'active' | 'completed' | 'cancelled';
+    winner: string | null;
+}
 
 type GameResult = 'win' | 'loss' | 'draw';
 
 interface GameEndModalProps {
     result: GameResult;
     matchId: string;
-    stakeInfo: SimpleStakeInfo;
+    stakeInfo: GameStakeInfo;
     playerAddress?: string;
     opponentAddress?: string;
     onClose: () => void;
@@ -33,10 +46,33 @@ export const GameEndModal: React.FC<GameEndModalProps> = ({
     onClose,
     onPlayAgain,
 }) => {
-    const { publicKey } = useWallet();
+    const { publicKey, signTransaction } = useWallet();
+    const { connection } = useConnection();
 
     const [isClaiming, setIsClaiming] = useState(false);
     const [hasClaimed, setHasClaimed] = useState(false);
+
+    // Initialize staking service with Anchor provider
+    const initializeStakingService = () => {
+        if (!publicKey || !signTransaction) return false;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const wallet: any = {
+            publicKey,
+            signTransaction,
+            signAllTransactions: async (txs: Transaction[]) => {
+                const signed = [];
+                for (const tx of txs) {
+                    signed.push(await signTransaction(tx));
+                }
+                return signed;
+            },
+        };
+
+        const provider = new AnchorProvider(connection, wallet, { commitment: 'confirmed' });
+        stakingService.initializeProgram(provider);
+        return true;
+    };
 
     // Trigger confetti on win
     useEffect(() => {
@@ -50,29 +86,53 @@ export const GameEndModal: React.FC<GameEndModalProps> = ({
     }, [result]);
 
     const handleClaimReward = async () => {
-        if (!publicKey) {
+        if (!publicKey || !signTransaction) {
             toast.error('Wallet not connected');
             return;
         }
 
         setIsClaiming(true);
         try {
-            const claimResult = await simpleStakingService.declareWinner(
-                matchId,
-                publicKey.toBase58()
+            // Initialize staking service
+            if (!initializeStakingService()) {
+                throw new Error('Failed to initialize staking service');
+            }
+
+            console.log('[GameEndModal] Declaring winner for match:', matchId);
+            console.log('[GameEndModal] Winner address:', publicKey.toBase58());
+
+            // First declare the winner on-chain
+            await stakingService.declareWinner(
+                {
+                    publicKey,
+                    signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
+                },
+                {
+                    matchId: matchId.toUpperCase(),
+                    winner: publicKey,
+                }
             );
 
-            if (claimResult.success) {
-                setHasClaimed(true);
-                toast.success('Reward claimed successfully!');
-                confetti({
-                    particleCount: 200,
-                    spread: 100,
-                    origin: { y: 0.4 },
-                });
-            } else {
-                throw new Error(claimResult.error);
-            }
+            console.log('[GameEndModal] Winner declared, now claiming reward...');
+
+            // Then claim the reward
+            const signature = await stakingService.claimReward(
+                {
+                    publicKey,
+                    signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
+                },
+                matchId.toUpperCase()
+            );
+
+            console.log('[GameEndModal] Reward claimed! Signature:', signature);
+
+            setHasClaimed(true);
+            toast.success('Reward claimed successfully!');
+            confetti({
+                particleCount: 200,
+                spread: 100,
+                origin: { y: 0.4 },
+            });
         } catch (err: any) {
             console.error('Claim error:', err);
             toast.error(err.message || 'Failed to claim reward');
@@ -82,16 +142,32 @@ export const GameEndModal: React.FC<GameEndModalProps> = ({
     };
 
     const handleDeclareDraw = async () => {
+        if (!publicKey || !signTransaction) {
+            toast.error('Wallet not connected');
+            return;
+        }
+
         setIsClaiming(true);
         try {
-            const drawResult = await simpleStakingService.declareDraw(matchId);
-
-            if (drawResult.success) {
-                setHasClaimed(true);
-                toast.success('Draw declared! Stakes refunded.');
-            } else {
-                throw new Error(drawResult.error);
+            // Initialize staking service
+            if (!initializeStakingService()) {
+                throw new Error('Failed to initialize staking service');
             }
+
+            console.log('[GameEndModal] Declaring draw for match:', matchId);
+
+            await stakingService.declareDraw(
+                {
+                    publicKey,
+                    signTransaction: signTransaction as (tx: Transaction) => Promise<Transaction>,
+                },
+                matchId.toUpperCase(),
+                new PublicKey(stakeInfo.hostAddress),
+                new PublicKey(stakeInfo.challengerAddress!)
+            );
+
+            setHasClaimed(true);
+            toast.success('Draw declared! Stakes refunded.');
         } catch (err: any) {
             console.error('Draw declaration error:', err);
             toast.error(err.message || 'Failed to declare draw');
@@ -100,7 +176,7 @@ export const GameEndModal: React.FC<GameEndModalProps> = ({
         }
     };
 
-    const { winnerReward } = simpleStakingService.calculateWinnerReward(stakeInfo.stakeAmountSol);
+    const { winnerReward } = stakingService.calculateWinnerReward(stakeInfo.stakeAmountSol);
 
     const getResultContent = () => {
         switch (result) {

@@ -109,6 +109,8 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
     // PeerJS refs
     const peerRef = useRef<Peer | null>(null);
     const connRef = useRef<DataConnection | null>(null);
+    // Track if we've handed off the connection to the game (don't cleanup if so)
+    const connectionHandedOff = useRef(false);
 
     // Initialize staking service with Anchor provider
     const initializeStakingService = () => {
@@ -132,9 +134,14 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
         return true;
     };
 
-    // Cleanup peer on unmount or cancel
+    // Cleanup peer on unmount or cancel (but NOT if connection was handed off to game)
     useEffect(() => {
         return () => {
+            if (connectionHandedOff.current) {
+                console.log('[StakeMatchModal] Connection handed off to game, skipping cleanup');
+                return;
+            }
+            console.log('[StakeMatchModal] Cleaning up peer connection');
             if (connRef.current) {
                 connRef.current.close();
             }
@@ -283,6 +290,8 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
                         console.log('[Host] Joiner staked and confirmed! Starting game...');
                         setJoinerTxSignature(msg.txSignature as string);
                         toast.success('Opponent joined! Game starting...');
+                        // Mark connection as handed off so cleanup doesn't close it
+                        connectionHandedOff.current = true;
                         onMatchReady({
                             matchId: roomCode,
                             stakeAmount: amount,
@@ -648,6 +657,8 @@ export const StakeMatchModal: React.FC<StakeMatchModalProps> = ({
             console.log('[Joiner] Sent stake confirmation');
 
             toast.success('Joined match! Game starting...');
+            // Mark connection as handed off so cleanup doesn't close it
+            connectionHandedOff.current = true;
             onMatchReady({
                 matchId: roomCode,
                 stakeAmount: hostStakeAmount,

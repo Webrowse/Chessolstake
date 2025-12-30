@@ -6,10 +6,9 @@ import ChessBoard from './components/ChessBoard';
 import SimpleLandingPage from './components/SimpleLandingPage';
 import PromotionModal from './components/PromotionModal';
 import StakeMatchModal from './components/StakeMatchModal';
-import GameEndModal from './components/GameEndModal';
+import GameEndModal, { GameStakeInfo } from './components/GameEndModal';
 import SimpleGameEndModal from './components/SimpleGameEndModal';
 import './index.css';
-import { SimpleStakeInfo } from './services/simpleStaking';
 import { PieceType, GameMode, BoardOrientation, TeamTheme, GameResult, OnlineMessage } from './types';
 import { Toaster, toast } from 'react-hot-toast';
 import confetti from 'canvas-confetti';
@@ -52,7 +51,7 @@ const App: React.FC = () => {
 
     // Staking state
     const [showStakeModal, setShowStakeModal] = useState(false);
-    const [stakeInfo, setStakeInfo] = useState<SimpleStakeInfo | null>(null);
+    const [stakeInfo, setStakeInfo] = useState<GameStakeInfo | null>(null);
     const [matchId, setMatchId] = useState<string | null>(null);
 
     // Peer connection state - using direct DataConnection from StakeMatchModal
@@ -94,8 +93,15 @@ const App: React.FC = () => {
 
     // Setup peer connection - just stores the connection, listeners are set up in useEffect
     const setupPeerConnection = useCallback((conn: DataConnection) => {
+        console.log('[App] Setting up peer connection, open:', conn.open);
         peerConnRef.current = conn;
-        setIsPeerConnected(conn.open);
+        // Force isPeerConnected to update and trigger effect
+        setIsPeerConnected(false);
+        // Then set to actual value on next tick to ensure effect runs
+        setTimeout(() => {
+            setIsPeerConnected(conn.open);
+            console.log('[App] Peer connection ready, open:', conn.open);
+        }, 0);
     }, []);
 
     // Effect to manage peer connection listeners
