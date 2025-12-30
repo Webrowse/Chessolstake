@@ -1,38 +1,47 @@
-# Final MVP Spec
+# PokeChess
 
-## Landing Page
+A chess game with Pokemon pieces and Solana staking.
 
-- Title + 2-5 line explainer
-- "**Play PvP**" button (local pass-and-play, no wallet)
-- "**Connect Wallet**" button → becomes "**Stake Match**" when connected
-- Disconnect button (top right when connected)
+## Project Structure
 
-## Staked Match Flow
+```
+pokechess/
+├── packages/
+│   ├── web/          # React frontend
+│   └── anchor/       # Solana program
+```
 
-**Host**:
-1. Click "Stake Match" → "Host" or "Join"
-2. Host: Enter room code (custom or generate random) + stake amount
-3. Sign transaction (SOL goes to escrow)
-4. Wait screen with room code to share
+## Development
 
-**Joiner**:
-1. Click "Stake Match" → "Join"
-2. Enter room code
-3. See host's stake amount → Accept or Decline
-4. If accept → Sign transaction (match stake)
-5. Game starts
+### Frontend
 
-## Game Rules
+```bash
+# Install dependencies
+npm install
 
-- 1 minute per turn
-- 3 strikes (timeouts) = auto-lose
-- Disconnect = auto-lose (opponent wins)
-- Checkmate/Stalemate handled by chess.js
+# Run dev server
+npm run dev
 
-### Winner Claim
-- Frontend determines winner
-- Winner clicks "Claim Reward"
-- Anchor contract transfers pot minus 2.5% fee
+# Build for production
+npm run build
+```
 
-### P2P Connection
-- PeerJS
+### Anchor Program
+
+```bash
+# Build the program
+npm run anchor:build
+
+# Deploy to devnet
+npm run anchor:deploy
+
+# Run tests
+npm run anchor:test
+```
+
+## MVP Features
+
+- **Play PvP**: Local pass-and-play, no wallet required
+- **Stake Match**: Connect wallet to host or join staked matches
+- 1 minute per turn, 3 strikes = auto-lose
+- Winner claims pot minus 2.5% platform fee

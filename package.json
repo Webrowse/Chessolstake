@@ -1,49 +1,16 @@
 {
   "name": "pokechess",
   "version": "1.0.0",
-  "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "dev:peer": "peerjs --port 9000",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:peer\"",
-    "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1",
-    "@google/genai": "^1.30.0",
-    "@solana/spl-token": "^0.4.14",
-    "@solana/wallet-adapter-base": "^0.9.27",
-    "@solana/wallet-adapter-react": "^0.15.39",
-    "@solana/wallet-adapter-react-ui": "^0.9.39",
-    "@solana/wallet-adapter-wallets": "^0.19.37",
-    "@solana/web3.js": "^1.98.4",
-    "bs58": "^6.0.0",
-    "buffer": "^6.0.3",
-    "canvas-confetti": "^1.9.0",
-    "chess.js": "^1.4.0",
-    "clsx": "^2.1.0",
-    "lucide-react": "^0.555.0",
-    "peerjs": "^1.5.4",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-hot-toast": "^2.6.0",
-    "stream-browserify": "^3.0.0",
-    "tailwind-merge": "^2.2.0"
-  },
-  "devDependencies": {
-    "@types/canvas-confetti": "^1.6.4",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.16",
-    "peer": "^1.0.2",
-    "postcss": "^8.4.32",
-    "tailwindcss": "^3.4.0",
-    "typescript": "^5.3.3",
-    "vite": "^5.0.8",
-    "vite-plugin-node-polyfills": "^0.24.0"
+    "dev": "npm run dev --workspace=packages/web",
+    "build": "npm run build --workspace=packages/web",
+    "preview": "npm run preview --workspace=packages/web",
+    "anchor:build": "cd packages/anchor && anchor build",
+    "anchor:deploy": "cd packages/anchor && anchor deploy",
+    "anchor:test": "cd packages/anchor && anchor test"
   }
 }
